@@ -1,0 +1,50 @@
+name: Build FORGE APK
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Create signing keystore
+        run: |
+          keytool -genkeypair -v \
+            -keystore "$GITHUB_WORKSPACE/forge.keystore" \
+            -alias forge -keyalg RSA -keysize 2048 -validity 10000 \
+            -storepass forge123 -keypass forge123 \
+            -dname "CN=FORGE, OU=FORGE, O=FORGE, L=Moscow, ST=Moscow, C=RU"
+
+      - name: Export Android APK with Godot 4.3
+        uses: dulvui/godot-android-export@v4
+        with:
+          godot-version: 4.3.0
+        env:
+          GODOT_ANDROID_KEYSTORE_RELEASE_PATH: ${{ github.workspace }}/forge.keystore
+          GODOT_ANDROID_KEYSTORE_RELEASE_USER: forge
+          GODOT_ANDROID_KEYSTORE_RELEASE_PASSWORD: forge123
+
+      - name: Upload APK as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: FORGE-APK
+          path: build/FORGE.apk
+          if-no-files-found: error
+
+      - name: Publish APK to Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v1.0.0
+          name: FORGE v1.0.0
+          body: "Минималистичная игра с кейсами, апгрейдом и инвентарём. Монеты виртуальные."
+          files: build/FORGE.apk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

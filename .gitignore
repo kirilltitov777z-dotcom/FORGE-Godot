@@ -1,0 +1,7 @@
+.godot/
+android/
+forge.keystore
+build/*
+!build/.gitkeep
+*.apk
+*.aab
