@@ -488,13 +488,12 @@ func _make_theme() -> Theme:
 	normal.content_margin_right = 12
 	normal.content_margin_top = 8
 	normal.content_margin_bottom = 8
-	var hover := normal.duplicate()
+	var hover: StyleBoxFlat = normal.duplicate() as StyleBoxFlat
 	hover.bg_color = Color("#232833")
-	var pressed := normal.duplicate()
+	var pressed: StyleBoxFlat = normal.duplicate() as StyleBoxFlat
 	pressed.bg_color = Color("#2b3240")
-	var disabled := normal.duplicate()
-	disabled.bg_color = D.SURFACE
-	disabled.modulate = Color(1, 1, 1, 0.45)
+	var disabled: StyleBoxFlat = normal.duplicate() as StyleBoxFlat
+	disabled.bg_color = Color("#101319")
 	for kind in ["Button", "OptionButton"]:
 		t.set_stylebox("normal", kind, normal)
 		t.set_stylebox("hover", kind, hover)
