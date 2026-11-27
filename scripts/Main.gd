@@ -42,6 +42,7 @@ var up_topup_label: Label = null
 var up_start_button: Button = null
 
 var ws_editing := ""
+var ws_name: String = ""
 var ws_pool: Dictionary = {}
 var ws_weights: Dictionary = {}
 var ws_search := ""
@@ -194,9 +195,8 @@ func _fmt(value: int) -> String:
 	var out := ""
 	for i in range(s.length()):
 		if i > 0 and (s.length() - i) % 3 == 0:
-			out += " "
-		out += s[s.length() - i - 1]
-	out = out.reversed()
+			out = " " + out
+		out = s.substr(i, 1) + out
 	return ("-" if value < 0 else "") + out
 
 func _skin_by_id(id: String) -> Dictionary:
@@ -905,7 +905,7 @@ func _render_workshop() -> void:
 	ws_name_edit.text = ws_name_edit.text if ws_name_edit.text != "" else ""
 	ws_name_edit.custom_minimum_size = Vector2(0, 40)
 	ws_name_edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	ws_name_edit.text_changed.connect(func(t): ws_name = t)
+	ws_name_edit.text_changed.connect(func(t): ws_name = str(t))
 	row.add_child(ws_name_edit)
 	ws_price_edit = LineEdit.new()
 	ws_price_edit.text = "300"
@@ -938,7 +938,7 @@ func _render_workshop() -> void:
 	ws_search_edit = LineEdit.new()
 	ws_search_edit.placeholder_text = "Поиск скина"
 	ws_search_edit.text = ws_search
-	ws_search_edit.text_changed.connect(func(t): ws_search = t; _render_pool())
+	ws_search_edit.text_changed.connect(func(t): ws_search = str(t); _render_pool())
 	fv.add_child(ws_search_edit)
 	ws_pool_grid = _grid(_columns(130))
 	fv.add_child(ws_pool_grid)
@@ -1003,7 +1003,7 @@ func _render_pool() -> void:
 	if ws_pool_grid == null:
 		return
 	_clear(ws_pool_grid)
-	var q := ws_search.to_lower().strip_edges()
+	var q: String = str(ws_search).to_lower().strip_edges()
 	var shown := 0
 	for s in skins:
 		if shown >= 120:
@@ -1168,7 +1168,7 @@ func _pick_target_modal() -> void:
 			grid.add_child(card)
 		search.text_changed.connect(func(t):
 			_clear(grid)
-			var q := t.to_lower().strip_edges()
+			var q: String = str(t).to_lower().strip_edges()
 			var shown := 0
 			for sk in list:
 				if shown >= 90:
