@@ -539,8 +539,8 @@ func _button(text: String, action: String, id: String = "") -> Button:
 func _grid(columns: int) -> GridContainer:
 	var g := GridContainer.new()
 	g.columns = maxi(1, columns)
-	g.h_separation = 10
-	g.v_separation = 10
+	g.add_theme_constant_override("h_separation", 10)
+	g.add_theme_constant_override("v_separation", 10)
 	g.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	return g
 
