@@ -69,6 +69,9 @@ jobs:
             -storepass forge123 -keypass forge123 \
             -dname "CN=FORGE, OU=FORGE, O=FORGE, L=Moscow, ST=Moscow, C=RU"
 
+      - name: Import project assets
+        run: timeout 45 godot --headless --path . -e || true
+
       - name: Headless runtime smoke test
         run: |
           output=$(timeout 30 godot --headless --path . --quit-after 5 2>&1)
