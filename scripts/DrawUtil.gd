@@ -1,13 +1,14 @@
 extends RefCounted
 
-const BG := Color("#0b0d10")
-const SURFACE := Color("#14171c")
-const SURFACE_2 := Color("#1b1f26")
-const LINE := Color("#262c35")
-const TEXT := Color("#e9eef4")
-const MUTED := Color("#8b95a3")
-const ACCENT := Color("#c6f24e")
-const RED := Color("#ff5470")
+const BG := Color("#0d1119")
+const SURFACE := Color("#161c28")
+const SURFACE_2 := Color("#1d2532")
+const LINE := Color("#293447")
+const TEXT := Color("#edf1f6")
+const MUTED := Color("#8e9aab")
+const ACCENT := Color("#e0a83f")
+const ACCENT_DARK := Color("#a87824")
+const RED := Color("#ff6b7f")
 
 static func hsl_to_color(h: float, s: float, l: float) -> Color:
 	h = fmod(h, 360.0) / 360.0

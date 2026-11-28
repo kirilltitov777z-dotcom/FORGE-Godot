@@ -5,6 +5,14 @@ const SkinCardScene = preload("res://scripts/SkinCard.gd")
 const CaseCardScene = preload("res://scripts/CaseCard.gd")
 const SkinArtScene = preload("res://scripts/SkinArt.gd")
 const CoinScene = preload("res://scripts/CoinIcon.gd")
+const WheelScene = preload("res://scripts/Wheel.gd")
+const SND_CLICK = preload("res://audio/click.wav")
+const SND_TOGGLE = preload("res://audio/toggle.wav")
+const SND_CASE = preload("res://audio/case.wav")
+const SND_WIN = preload("res://audio/win.wav")
+const SND_LOSE = preload("res://audio/lose.wav")
+const SND_REWARD = preload("res://audio/reward.wav")
+const SND_DAILY = preload("res://audio/daily.wav")
 
 const SKINS_FILE := "res://data/skins.json"
 const CASES_FILE := "res://data/cases.json"
@@ -37,6 +45,13 @@ var up_source_uid := ""
 var up_target_id := ""
 var up_chance := 75
 var up_custom := false
+var up_multiplier := 1
+var wheel: Control = null
+var case_search := ""
+var case_sort := 0
+var case_grid: GridContainer = null
+var case_count_label: Label = null
+var audio: AudioStreamPlayer = null
 var up_chance_label: Label = null
 var up_topup_label: Label = null
 var up_start_button: Button = null
@@ -68,6 +83,9 @@ func _ready() -> void:
 	randomize()
 	_load_data()
 	_load_game()
+	audio = AudioStreamPlayer.new()
+	audio.volume_db = -7.0
+	add_child(audio)
 	theme = _make_theme()
 	_build_ui()
 	_show_tab("cases")
@@ -329,12 +347,12 @@ func _open_case(id: String) -> Dictionary:
 	_refresh_header()
 	return {"ok": true, "skin": sk, "duplicated": added["duplicated"], "gain": added["gain"], "box": box}
 
-func _upgrade_topup(source: Dictionary, target: Dictionary, chance: int) -> int:
+func _upgrade_topup(source: Dictionary, target: Dictionary, chance: int, mult: int = 1) -> int:
 	var edge := clampf(float(config.get("house_edge", 0.12)), 0.0, 0.9)
 	var needed := float(chance) / 100.0 * float(target.get("value", 0)) / (1.0 - edge)
-	return maxi(0, int(ceil(needed - float(source.get("value", 0)))))
+	return maxi(0, int(ceil(needed - float(source.get("value", 0)) * float(mult))))
 
-func _upgrade(uid: String, target_id: String, chance: int) -> Dictionary:
+func _upgrade(uid: String, target_id: String, chance: int, mult: int = 1) -> Dictionary:
 	var item: Dictionary = {}
 	for it in inventory:
 		if str(it.get("uid", "")) == uid:
@@ -344,15 +362,26 @@ func _upgrade(uid: String, target_id: String, chance: int) -> Dictionary:
 	var target := _skin_by_id(target_id)
 	if source.is_empty() or target.is_empty():
 		return {"ok": false, "reason": "Ошибка данных"}
-	if int(target.get("value", 0)) <= int(source.get("value", 0)):
-		return {"ok": false, "reason": "Цель должна быть дороже"}
+	var owned := _count_skin(str(source.get("id", "")))
+	if owned < mult:
+		return {"ok": false, "reason": "Нужно больше копий этого скина"}
+	if int(target.get("value", 0)) <= int(source.get("value", 0)) * mult:
+		return {"ok": false, "reason": "Цель должна быть дороже ставки"}
 	chance = clampi(chance, 5, 95)
-	var topup := _upgrade_topup(source, target, chance)
+	var topup := _upgrade_topup(source, target, chance, mult)
 	if balance < topup:
 		return {"ok": false, "reason": "Не хватает монет на доплату"}
 	balance -= topup
 	stats["spent"] = int(stats["spent"]) + topup
-	inventory.erase(item)
+	var sid := str(source.get("id", ""))
+	var removed := 0
+	var keep: Array = []
+	for it in inventory:
+		if removed < mult and str(it.get("skin_id", "")) == sid:
+			removed += 1
+		else:
+			keep.append(it)
+	inventory = keep
 	stats["upgrades"] = int(stats["upgrades"]) + 1
 	var win := randf() * 100.0 < float(chance)
 	var added := {"duplicated": false, "gain": 0}
@@ -584,15 +613,6 @@ func _build_ui() -> void:
 	settings_btn.custom_minimum_size = Vector2(38, 38)
 	head.add_child(settings_btn)
 
-	var tabs := HBoxContainer.new()
-	tabs.add_theme_constant_override("separation", 6)
-	root_box.add_child(tabs)
-	for item in [["cases", "Кейсы"], ["upgrade", "Апгрейд"], ["inventory", "Инвентарь"], ["workshop", "Мастерская"]]:
-		var b := _button(str(item[1]), "tab", str(item[0]))
-		b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		tabs.add_child(b)
-		tab_buttons[str(item[0])] = b
-
 	var scroll := ScrollContainer.new()
 	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
@@ -601,6 +621,23 @@ func _build_ui() -> void:
 	content_vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	content_vbox.add_theme_constant_override("separation", 12)
 	scroll.add_child(content_vbox)
+
+	var nav := HBoxContainer.new()
+	nav.add_theme_constant_override("separation", 2)
+	nav.custom_minimum_size = Vector2(0, 58)
+	root_box.add_child(nav)
+	for item in [
+		["upgrade", "▲", "Апгрейд"],
+		["cases", "▤", "Магазин"],
+		["workshop", "◫", "Режимы"],
+		["inventory", "▣", "Инвентарь"],
+		["profile", "☻", "Профиль"],
+	]:
+		var b := _button(str(item[1]) + "\n" + str(item[2]), "tab", str(item[0]))
+		b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		b.custom_minimum_size = Vector2(0, 54)
+		nav.add_child(b)
+		tab_buttons[str(item[0])] = b
 
 	toast_label = _label("", 13, D.ACCENT)
 	toast_label.visible = false
@@ -626,6 +663,11 @@ func _build_ui() -> void:
 	panel.add_child(overlay_vbox)
 	_refresh_header()
 
+func _play_sound(stream: AudioStream) -> void:
+	if audio != null and bool(settings.get("sound", true)):
+		audio.stream = stream
+		audio.play()
+
 func _refresh_header() -> void:
 	if balance_label != null:
 		balance_label.text = "Баланс: " + _fmt(balance) + " ₽"
@@ -636,6 +678,9 @@ func _on_resized() -> void:
 	_render_screen()
 
 func _show_tab(tab: String) -> void:
+	if tab == "profile":
+		_settings_modal()
+		return
 	current_tab = tab
 	for k in tab_buttons.keys():
 		var b: Button = tab_buttons[k]
@@ -671,28 +716,61 @@ func _toast(text: String) -> void:
 # ---------------------------------------------------------------- screens
 
 func _render_cases() -> void:
-	_section("Кейсы", str(_all_cases().size()) + " наборов · шансы видны перед открытием")
-	var top := HBoxContainer.new()
-	top.add_child(_button("Создать свой →", "tab", "workshop"))
-	content_vbox.add_child(top)
-	var grid := _grid(_columns(170))
+	content_vbox.add_child(_label("МАГАЗИН", 24, D.TEXT))
+	var search := LineEdit.new()
+	search.placeholder_text = "Поиск по названию"
+	search.text = case_search
+	search.custom_minimum_size = Vector2(0, 42)
+	search.text_changed.connect(func(t): case_search = str(t); _render_case_grid())
+	content_vbox.add_child(search)
+	var tools := HBoxContainer.new()
+	tools.add_child(_button("Фильтры", "tab", "workshop"))
+	var sort := OptionButton.new()
+	sort.add_item("Сначала дешёвые", 0)
+	sort.add_item("Сначала дорогие", 1)
+	sort.selected = case_sort
+	sort.item_selected.connect(func(idx): case_sort = idx; _render_case_grid())
+	tools.add_child(sort)
+	content_vbox.add_child(tools)
+	case_count_label = _label("", 11, D.MUTED)
+	content_vbox.add_child(case_count_label)
+	case_grid = _grid(2)
+	content_vbox.add_child(case_grid)
+	_render_case_grid()
+
+func _render_case_grid() -> void:
+	if case_grid == null:
+		return
+	_clear(case_grid)
 	var all := _all_cases()
-	for i in range(all.size()):
-		var box: Dictionary = all[i]
+	var q := str(case_search).to_lower().strip_edges()
+	var list: Array = []
+	for box in all:
+		if q != "" and not str(box.get("name", "")).to_lower().contains(q):
+			continue
+		list.append(box)
+	if case_sort == 0:
+		list.sort_custom(func(a, b): return int(a.get("price", 0)) < int(b.get("price", 0)))
+	else:
+		list.sort_custom(func(a, b): return int(a.get("price", 0)) > int(b.get("price", 0)))
+	if case_count_label != null:
+		case_count_label.text = str(list.size()) + " предметов"
+	for box in list:
 		var card := CaseCardScene.new()
 		card.case_data = box
 		card.card_id = str(box.get("id", ""))
-		card.custom_minimum_size = Vector2(0, 168)
+		card.custom_minimum_size = Vector2(0, 176)
 		var cid := card.card_id
-		card.clicked.connect(func(_x): _on_action("case", cid, card))
-		grid.add_child(card)
-	content_vbox.add_child(grid)
+		card.clicked.connect(func(_x): _play_sound(SND_CLICK); _on_action("case", cid, card))
+		case_grid.add_child(card)
 
-func _slot(label: String, skin: Dictionary, action: String) -> PanelContainer:
+func _slot(label: String, skin: Dictionary, action: String, decoration: String = "") -> PanelContainer:
 	var panel := PanelContainer.new()
 	var vbox := VBoxContainer.new()
 	panel.add_child(vbox)
 	vbox.add_child(_label(label, 11, D.MUTED))
+	if decoration != "":
+		vbox.add_child(_label(decoration, 13, D.ACCENT))
 	if skin.is_empty():
 		vbox.add_child(_label("Пусто", 13, D.MUTED))
 	else:
@@ -718,25 +796,49 @@ func _target_skin() -> Dictionary:
 	return _skin_by_id(up_target_id)
 
 func _render_upgrade() -> void:
-	_section("Апгрейд", "Выберите свой предмет и цель. Ниже шанс — дороже цель.")
+	content_vbox.add_child(_label("UPGRADER", 24, D.TEXT))
+	var top := HBoxContainer.new()
+	var sound := _button("♪", "toggle_sound")
+	sound.custom_minimum_size = Vector2(44, 36)
+	top.add_child(sound)
+	var spacer := Control.new()
+	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	top.add_child(spacer)
+	top.add_child(_button("▤ Кейсы", "tab", "cases"))
+	top.add_child(_button("⚙", "settings"))
+	content_vbox.add_child(top)
+
+	wheel = WheelScene.new()
+	wheel.custom_minimum_size = Vector2(0, 290)
+	wheel.set_value(float(up_chance))
+	content_vbox.add_child(wheel)
+
 	var source := _source_skin()
 	var target := _target_skin()
 	var stage := HBoxContainer.new()
 	stage.add_theme_constant_override("separation", 8)
-	var left := _slot("Ваш предмет", source, "pick_source")
+	var left := _slot("ВАША СТАВКА", source, "pick_source", "▼ ▼ ▼")
 	left.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	stage.add_child(left)
-	stage.add_child(_label("→", 22, D.ACCENT))
-	var right := _slot("Цель", target, "pick_target")
+	stage.add_child(_label("→", 20, D.ACCENT))
+	var right := _slot("ЦЕЛЬ", target, "pick_target", "▲ ▲ ▲")
 	right.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	stage.add_child(right)
 	content_vbox.add_child(stage)
+	content_vbox.add_child(_button("ВЫБЕРИТЕ СКИНЫ ДЛЯ СТАВКИ", "pick_source"))
+
+	var mults := HBoxContainer.new()
+	for m in [1, 2, 4, 8]:
+		var b := _button("x" + str(m), "mult", str(m))
+		if up_multiplier == int(m):
+			b.add_theme_color_override("font_color", D.ACCENT)
+		mults.add_child(b)
+	content_vbox.add_child(mults)
 
 	var presets := HBoxContainer.new()
 	presets.add_theme_constant_override("separation", 6)
-	for p in [25, 55, 75]:
-		var label := str(p) + "%"
-		var b := _button(label, "chance", str(p))
+	for p in [25, 35, 55, 75]:
+		var b := _button(str(p) + "%", "chance", str(p))
 		if not up_custom and up_chance == int(p):
 			b.add_theme_color_override("font_color", D.ACCENT)
 		presets.add_child(b)
@@ -755,31 +857,29 @@ func _render_upgrade() -> void:
 		content_vbox.add_child(slider)
 		up_chance_label = _label("Шанс: " + str(up_chance) + "%", 14, D.TEXT)
 		content_vbox.add_child(up_chance_label)
-		var proxy := Callable(self, "_on_chance_slider")
-		slider.value_changed.connect(proxy)
+		slider.value_changed.connect(Callable(self, "_on_chance_slider"))
 	else:
 		up_chance_label = null
 
 	var topup := 0
+	var owned := 0
+	if not source.is_empty():
+		owned = _count_skin(str(source.get("id", "")))
 	if not source.is_empty() and not target.is_empty():
-		topup = _upgrade_topup(source, target, up_chance)
-	up_topup_label = _label("Доплата: " + _fmt(topup) + " ₽ · комиссия " + str(int(round(float(config.get("house_edge", 0.12)) * 100.0))) + "%", 13, D.MUTED)
+		topup = _upgrade_topup(source, target, up_chance, up_multiplier)
+	up_topup_label = _label("Ставка: " + str(up_multiplier) + " шт. · доплата: " + _fmt(topup) + " ₽ · комиссия " + str(int(round(float(config.get("house_edge", 0.12)) * 100.0))) + "%", 13, D.MUTED)
 	content_vbox.add_child(up_topup_label)
 
-	var can := not source.is_empty() and not target.is_empty() and int(target.get("value", 0)) > int(source.get("value", 0)) and balance >= topup
-	up_start_button = _button("Начать апгрейд", "do_upgrade")
+	var can := not source.is_empty() and not target.is_empty() and owned >= up_multiplier and int(target.get("value", 0)) > int(source.get("value", 0)) * up_multiplier and balance >= topup
+	up_start_button = _button("НАЧАТЬ АПГРЕЙД", "do_upgrade")
 	up_start_button.disabled = not can
 	content_vbox.add_child(up_start_button)
-	if not source.is_empty() and not target.is_empty() and int(target.get("value", 0)) <= int(source.get("value", 0)):
-		content_vbox.add_child(_label("Цель должна быть дороже вашего предмета.", 12, D.RED))
+	if not source.is_empty() and owned < up_multiplier:
+		content_vbox.add_child(_label("Нужно " + str(up_multiplier) + " копий этого скина.", 12, D.RED))
+	elif not source.is_empty() and not target.is_empty() and int(target.get("value", 0)) <= int(source.get("value", 0)) * up_multiplier:
+		content_vbox.add_child(_label("Цель должна быть дороже ставки.", 12, D.RED))
 	if balance < topup and not source.is_empty() and not target.is_empty():
 		content_vbox.add_child(_label("Не хватает монет на доплату.", 12, D.RED))
-
-	var history := ""
-	for i in range(maxi(0, log_entries.size() - 8), log_entries.size()):
-		history += str(log_entries[i]) + "\n"
-	var hist := _label("История\n" + (history if history != "" else "Пока пусто"), 11, D.MUTED)
-	content_vbox.add_child(hist)
 
 func _on_chance_slider(value: float) -> void:
 	up_chance = int(value)
@@ -789,57 +889,67 @@ func _on_chance_slider(value: float) -> void:
 	var target := _target_skin()
 	var topup := 0
 	if not source.is_empty() and not target.is_empty():
-		topup = _upgrade_topup(source, target, up_chance)
+		topup = _upgrade_topup(source, target, up_chance, up_multiplier)
 	if up_topup_label != null:
-		up_topup_label.text = "Доплата: " + _fmt(topup) + " ₽ · комиссия " + str(int(round(float(config.get("house_edge", 0.12)) * 100.0))) + "%"
+		up_topup_label.text = "Ставка: " + str(up_multiplier) + " шт. · доплата: " + _fmt(topup) + " ₽ · комиссия " + str(int(round(float(config.get("house_edge", 0.12)) * 100.0))) + "%"
 	if up_start_button != null:
-		up_start_button.disabled = not (not source.is_empty() and not target.is_empty() and int(target.get("value", 0)) > int(source.get("value", 0)) and balance >= topup)
+		var owned := 0
+		if not source.is_empty():
+			owned = _count_skin(str(source.get("id", "")))
+		up_start_button.disabled = not (not source.is_empty() and not target.is_empty() and owned >= up_multiplier and int(target.get("value", 0)) > int(source.get("value", 0)) * up_multiplier and balance >= topup)
+	if wheel != null:
+		wheel.set_value(float(up_chance))
+
+func _weapon_name(id: String) -> String:
+	for w in weapons:
+		if str(w.get("id", "")) == id:
+			return str(w.get("name", "")).to_upper()
+	return id.to_upper()
 
 func _render_inventory() -> void:
 	var all := _inventory_items()
-	_section("Инвентарь", "Продажа за " + str(int(round(float(config.get("sell_rate", 0.65)) * 100.0))) + "% стоимости")
+	var head := HBoxContainer.new()
+	head.add_child(_label("ИНВЕНТАРЬ", 24, D.TEXT))
+	var spacer := Control.new()
+	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	head.add_child(spacer)
+	head.add_child(_label("ПРЕДМЕТОВ: " + str(all.size()), 12, D.MUTED))
+	content_vbox.add_child(head)
+
 	var stats_row := HBoxContainer.new()
 	var items = [
-		[str(all.size()), "предметов"],
-		[_fmt(_inventory_value()) + " ₽", "стоимость"],
-		[str(int(stats.get("sold", 0))), "продано"],
+		[_fmt(balance) + " ₽", "баланс"],
+		[_fmt(_inventory_value()) + " ₽", "ценность"],
 	]
 	for pair in items:
 		var box := PanelContainer.new()
 		var v := VBoxContainer.new()
 		box.add_child(v)
-		v.add_child(_label(str(pair[0]), 17, D.TEXT))
+		v.add_child(_label(str(pair[0]), 16, D.ACCENT))
 		v.add_child(_label(str(pair[1]), 10, D.MUTED))
 		box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		stats_row.add_child(box)
+	stats_row.add_child(_button("⊕ КЕЙС ЗА БОНУС", "daily"))
 	content_vbox.add_child(stats_row)
+	var sell_all := _button("✦ ПРОДАТЬ ВСЁ · " + _fmt(int(_inventory_value() * float(config.get("sell_rate", 0.65)))) + " ₽", "sell_all")
+	sell_all.disabled = all.is_empty()
+	content_vbox.add_child(sell_all)
 
-	var filters := _grid(maxi(2, _columns(110)))
-	filters.add_child(_button("Все", "inv_rarity", "all"))
-	for r in rarities:
-		filters.add_child(_button(str(r.get("name", "")), "inv_rarity", str(r.get("id", ""))))
-	content_vbox.add_child(filters)
-
-	var tools := HBoxContainer.new()
-	var weapon := OptionButton.new()
-	weapon.add_item("Все типы", 0)
-	for i in range(weapons.size()):
-		weapon.add_item(str(weapons[i].get("name", "")), i + 1)
-	tools.add_child(weapon)
+	var filters := HBoxContainer.new()
+	filters.add_child(_button("⚙ Фильтры", "tab", "workshop"))
 	var sort := OptionButton.new()
-	sort.add_item("Дороже сверху", 0)
-	sort.add_item("Дешевле сверху", 1)
-	sort.add_item("По редкости", 2)
-	sort.add_item("По названию", 3)
-	tools.add_child(sort)
-	content_vbox.add_child(tools)
-	weapon.selected = 0
-	for i in range(weapons.size()):
-		if str(weapons[i].get("id", "")) == inv_weapon:
-			weapon.selected = i + 1
-	sort.selected = 0 if inv_sort == "value_desc" else (1 if inv_sort == "value_asc" else (2 if inv_sort == "rarity" else 3))
-	weapon.item_selected.connect(func(idx): inv_weapon = "all" if idx == 0 else str(weapons[idx - 1].get("id", "")); _render_screen())
-	sort.item_selected.connect(func(idx): inv_sort = ["value_desc", "value_asc", "rarity", "name"][idx]; _render_screen())
+	sort.add_item("↕ Сначала дорогие", 0)
+	sort.add_item("↕ Сначала дешёвые", 1)
+	sort.selected = 0 if inv_sort == "value_desc" else 1
+	sort.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	sort.item_selected.connect(func(idx): inv_sort = "value_desc" if idx == 0 else "value_asc"; _render_screen())
+	filters.add_child(sort)
+	content_vbox.add_child(filters)
+	var rarity_row := HBoxContainer.new()
+	rarity_row.add_child(_button("Все", "inv_rarity", "all"))
+	for r in rarities:
+		rarity_row.add_child(_button(str(r.get("name", "")), "inv_rarity", str(r.get("id", ""))))
+	content_vbox.add_child(rarity_row)
 
 	var sell_sum := 0
 	var count := 0
@@ -847,40 +957,35 @@ func _render_inventory() -> void:
 		if selected.has(str(it.get("uid", ""))):
 			sell_sum += int(round(float(it["skin"].get("value", 0)) * float(config.get("sell_rate", 0.65))))
 			count += 1
-	var sell := _button("Продать " + str(count) + " · " + _fmt(sell_sum) + " ₽", "sell_selected")
-	sell.disabled = count == 0
-	content_vbox.add_child(sell)
-	content_vbox.add_child(_button("Снять выделение", "clear_selected"))
+	if count > 0:
+		content_vbox.add_child(_button("ПРОДАТЬ ВЫБРАННОЕ · " + _fmt(sell_sum) + " ₽", "sell_selected"))
+		content_vbox.add_child(_button("Снять выделение", "clear_selected"))
 
 	var shown: Array = []
 	for it in all:
 		if inv_rarity != "all" and str(it["skin"].get("rarity", "")) != inv_rarity:
 			continue
-		if inv_weapon != "all" and str(it["skin"].get("weapon", "")) != inv_weapon:
-			continue
 		shown.append(it)
-	match inv_sort:
-		"value_asc":
-			shown.sort_custom(func(a, b): return int(a["skin"].get("value", 0)) < int(b["skin"].get("value", 0)))
-		"rarity":
-			shown.sort_custom(func(a, b): return _rarity_index(a["skin"]) > _rarity_index(b["skin"]))
-		"name":
-			shown.sort_custom(func(a, b): return str(a["skin"].get("name", "")) < str(b["skin"].get("name", "")))
-		_:
-			shown.sort_custom(func(a, b): return int(a["skin"].get("value", 0)) > int(b["skin"].get("value", 0)))
+	if inv_sort == "value_asc":
+		shown.sort_custom(func(a, b): return int(a["skin"].get("value", 0)) < int(b["skin"].get("value", 0)))
+	else:
+		shown.sort_custom(func(a, b): return int(a["skin"].get("value", 0)) > int(b["skin"].get("value", 0)))
 	if shown.is_empty():
 		content_vbox.add_child(_label("Здесь пока пусто. Откройте кейс, чтобы получить скины.", 13, D.MUTED))
 		return
-	var grid := _grid(_columns(140))
+	var grid := _grid(2)
 	for it in shown:
 		var sk: Dictionary = it["skin"]
 		var card := SkinCardScene.new()
 		card.skin = sk
 		card.selected = selected.has(str(it.get("uid", "")))
 		card.card_id = str(it.get("uid", ""))
-		card.custom_minimum_size = Vector2(0, 138)
+		card.show_sell = true
+		card.type_label = _weapon_name(str(sk.get("weapon", "")))
+		card.custom_minimum_size = Vector2(0, 168)
 		var uid := card.card_id
-		card.clicked.connect(func(_x): _on_action("select_item", uid, card))
+		card.clicked.connect(func(_x): _play_sound(SND_CLICK); _on_action("select_item", uid, card))
+		card.sell_clicked.connect(func(_x): _on_action("sell_one", uid, card))
 		grid.add_child(card)
 	content_vbox.add_child(grid)
 
@@ -1089,6 +1194,7 @@ func _case_anim(id: String) -> void:
 		_toast(str(res.get("reason", "Ошибка")))
 		return
 	var box: Dictionary = res.get("box", {})
+	_play_sound(SND_CASE)
 	var pool: Array = box.get("pool", [])
 	var roll_label := _label("", 16, D.ACCENT)
 	roll_label.custom_minimum_size = Vector2(0, 46)
@@ -1191,35 +1297,27 @@ func _pick_target_modal() -> void:
 func _upgrade_anim() -> void:
 	var source := _source_skin()
 	var target := _target_skin()
-	var res := _upgrade(up_source_uid, up_target_id, up_chance)
+	var res := _upgrade(up_source_uid, up_target_id, up_chance, up_multiplier)
 	if not bool(res.get("ok", false)):
 		_toast(str(res.get("reason", "Ошибка")))
 		return
+	_play_sound(SND_TOGGLE)
+	var spin_wheel := WheelScene.new()
+	spin_wheel.custom_minimum_size = Vector2(0, 260)
+	var wheel_ref: Control = spin_wheel
 	var token := _show_overlay(func(vbox):
-		_modal_title(vbox, "Апгрейд " + str(res.get("chance", 0)) + "%", "Доплата " + _fmt(int(res.get("topup", 0))) + " ₽")
-		var stage := HBoxContainer.new()
-		var s1 := _slot("Отдаёте", source, "")
-		s1.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		stage.add_child(s1)
-		stage.add_child(_label("→", 20, D.ACCENT))
-		var s2 := _slot("Получаете", target, "")
-		s2.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		stage.add_child(s2)
-		vbox.add_child(stage)
-		var bar := ProgressBar.new()
-		bar.min_value = 0
-		bar.max_value = 100
-		bar.value = 0
-		bar.custom_minimum_size = Vector2(0, 10)
-		vbox.add_child(bar)
-		var tween := create_tween()
-		tween.tween_property(bar, "value", float(res.get("chance", 0)), 1.5).set_ease(Tween.EASE_OUT)
+		_modal_title(vbox, "Апгрейд " + str(res.get("chance", 0)) + "%", "Ставка x" + str(up_multiplier) + " · доплата " + _fmt(int(res.get("topup", 0))) + " ₽")
+		vbox.add_child(wheel_ref)
 	)
+	var tween := create_tween()
+	tween.tween_method(Callable(wheel_ref, "set_value"), 0.0, float(res.get("chance", 0)), 1.5).set_ease(Tween.EASE_OUT)
 	await get_tree().create_timer(1.7).timeout
 	if token != overlay_token:
 		return
-	_clear(overlay_vbox)
 	var win := bool(res.get("win", false))
+	wheel_ref.set_value(float(res.get("chance", 0)) if win else 0.0)
+	_play_sound(SND_WIN if win else SND_LOSE)
+	_clear(overlay_vbox)
 	var title := "НЕ ПОВЕЗЛО"
 	var color := D.RED
 	if win:
@@ -1258,6 +1356,7 @@ func _settings_modal() -> void:
 func _on_action(action: String, id: String, node: Node) -> void:
 	match action:
 		"tab":
+			_play_sound(SND_CLICK)
 			_close_overlay()
 			_show_tab(id)
 		"show_upgrade":
@@ -1274,11 +1373,17 @@ func _on_action(action: String, id: String, node: Node) -> void:
 		"pick_target":
 			_pick_target_modal()
 		"chance":
+			_play_sound(SND_CLICK)
 			up_chance = int(id)
 			up_custom = false
 			_render_screen()
 		"custom_chance":
+			_play_sound(SND_CLICK)
 			up_custom = true
+			_render_screen()
+		"mult":
+			_play_sound(SND_CLICK)
+			up_multiplier = int(id)
 			_render_screen()
 		"do_upgrade":
 			_upgrade_anim()
@@ -1298,14 +1403,33 @@ func _on_action(action: String, id: String, node: Node) -> void:
 		"sell_selected":
 			var res := _sell_items(selected.keys())
 			if bool(res.get("ok", false)):
+				_play_sound(SND_REWARD)
 				_toast("Продано " + str(res.get("count", 0)) + " · +" + _fmt(int(res.get("total", 0))) + " ₽")
 				selected.clear()
 				_render_screen()
 			else:
 				_toast(str(res.get("reason", "Ошибка")))
+		"sell_one":
+			var res := _sell_items([id])
+			if bool(res.get("ok", false)):
+				_play_sound(SND_REWARD)
+				_toast("Продано · +" + _fmt(int(res.get("total", 0))) + " ₽")
+				selected.erase(id)
+				_render_screen()
+		"sell_all":
+			var uids: Array = []
+			for it in _inventory_items():
+				uids.append(str(it.get("uid", "")))
+			var res := _sell_items(uids)
+			if bool(res.get("ok", false)):
+				_play_sound(SND_REWARD)
+				_toast("Продано " + str(res.get("count", 0)) + " · +" + _fmt(int(res.get("total", 0))) + " ₽")
+				selected.clear()
+				_render_screen()
 		"daily":
 			var r := _check_daily()
 			if bool(r.get("ok", false)):
+				_play_sound(SND_DAILY)
 				_toast("Бонус: +" + _fmt(int(r.get("amount", 0))) + " ₽")
 				_render_screen()
 			else:
@@ -1344,6 +1468,8 @@ func _on_action(action: String, id: String, node: Node) -> void:
 			_toast("Базовая база восстановлена")
 			_render_screen()
 		"toggle_sound":
+			if bool(settings.get("sound", true)):
+				_play_sound(SND_TOGGLE)
 			settings["sound"] = not bool(settings.get("sound", true))
 			_save_game()
 			if overlay.visible:
